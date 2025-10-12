@@ -1,0 +1,106 @@
+// Program.cs
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Sustainsys.Saml2;
+using Sustainsys.Saml2.Metadata;
+using Sustainsys.Saml2.AspNetCore2;
+using Sustainsys.Saml2.WebSso;
+using CompdtBEAPI.Services;
+using CompdtBEAPI.Data;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// Dapper Context
+builder.Services.AddSingleton<DapperContext>();
+
+// Services
+builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IMenuService, MenuService>();
+builder.Services.AddScoped<IPolicyService, PolicyService>();
+
+// Memory Cache
+builder.Services.AddMemoryCache();
+builder.Services.AddResponseCaching();
+
+// CORS Configuration
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAngular", policy =>
+    {
+        policy.WithOrigins(
+                "http://localhost:4200",
+                "https://localhost:4200",
+                "https://istaruat.id.sunlife:4490",
+                "https://istaruat.id.sunlife:4491"
+            )
+            .AllowAnyMethod()
+            .AllowAnyHeader()
+            .AllowCredentials();
+    });
+});
+
+// SAML2 Authentication Configuration
+builder.Services.AddAuthentication(sharedOptions =>
+{
+    sharedOptions.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+    sharedOptions.DefaultSignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+    sharedOptions.DefaultChallengeScheme = Saml2Defaults.Scheme;
+})
+.AddCookie(options =>
+{
+    options.Cookie.Name = "CompdtBEAPI.Auth";
+    options.Cookie.SameSite = SameSiteMode.None;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+    options.LoginPath = "/api/auth/login";
+    options.LogoutPath = "/api/auth/logout";
+})
+.AddSaml2(options =>
+{
+    // Entity ID/Audience URL
+    options.SPOptions.EntityId = new EntityId("https://istaruat.id.sunlife:4490/");
+
+    // Module Path untuk ACS endpoint
+    options.SPOptions.ModulePath = "/Saml2";
+
+    // Public Origin
+    options.SPOptions.PublicOrigin = new Uri("https://istaruat.id.sunlife:4491");
+
+    // Return URL setelah login sukses
+    options.SPOptions.ReturnUrl = new Uri("https://istaruat.id.sunlife:4491/api/auth/callback");
+
+    // Identity Provider Configuration
+    var idp = new IdentityProvider(
+        new EntityId("https://sts.windows.net/415bb03f-1a20-4fbe-9b57-313be7050945/"),
+        options.SPOptions)
+    {
+        SingleSignOnServiceUrl = new Uri("https://login.microsoftonline.com/415bb08f-1a20-4fbe-9b57-313be7050945/saml2"),
+        SingleLogoutServiceUrl = new Uri("https://login.microsoftonline.com/415bb08f-1a20-4fbe-9b57-313be7050945/saml2"),
+        Binding = Saml2BindingType.HttpPost,
+        AllowUnsolicitedAuthnResponse = true
+    };
+
+    options.IdentityProviders.Add(idp);
+
+    // HAPUS BAGIAN NOTIFICATIONS - tidak diperlukan
+});
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
+app.UseCors("AllowAngular");
+app.UseResponseCaching();
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+
+app.Run();
