@@ -1,0 +1,429 @@
+====program.cs====
+
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.IdentityModel.Tokens;
+using Sustainsys.Saml2;
+using Sustainsys.Saml2.AspNetCore2;
+using Sustainsys.Saml2.Metadata;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services
+builder.Services.AddMemoryCache();
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+});
+
+// Configure CORS
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAngular", policy =>
+    {
+        policy.WithOrigins("http://localhost:4200", "https://istaruat.id.sunlife:4490")
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials();
+    });
+});
+
+// Configure Authentication
+var jwtKey = builder.Configuration["Jwt:Key"];
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+    options.DefaultSignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = "Saml2";
+})
+.AddCookie(options =>
+{
+    options.Cookie.Name = "CompdtAuth";
+    options.Cookie.SameSite = SameSiteMode.Lax;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+    options.ExpireTimeSpan = TimeSpan.FromHours(8);
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = builder.Configuration["Jwt:Issuer"],
+        ValidAudience = builder.Configuration["Jwt:Audience"],
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
+    };
+})
+.AddSaml2(options =>
+{
+    // Service Provider Options
+    options.SPOptions.EntityId = new EntityId(builder.Configuration["Saml2:EntityId"]);
+    
+    // Return URL setelah login
+    options.SPOptions.ReturnUrl = new Uri(builder.Configuration["Saml2:CallbackUrl"]);
+    
+    // Module Path - penting untuk routing
+    options.SPOptions.ModulePath = "/Saml2";
+    
+    // Public origin untuk generate correct URLs
+    options.SPOptions.PublicOrigin = new Uri("https://istaruat.id.sunlife:4491");
+    
+    // Metadata valid duration
+    options.SPOptions.Metadata.CacheDuration = TimeSpan.FromDays(1);
+    
+    // Signature algorithm
+    options.SPOptions.Metadata.RequestedSignatureAlgorithm = SecurityAlgorithms.RsaSha256Signature;
+    
+    // Identity Provider Configuration
+    var idp = new IdentityProvider(
+        new EntityId(builder.Configuration["Saml2:EntraIdentifier"]),
+        options.SPOptions)
+    {
+        // Metadata Location (Azure AD Federation Metadata)
+        MetadataLocation = $"https://login.microsoftonline.com/{builder.Configuration["Saml2:TenantId"]}/federationmetadata/2007-06/federationmetadata.xml",
+        
+        // Load metadata automatically
+        LoadMetadata = true,
+        
+        // Allow unsolicited authn response
+        AllowUnsolicitedAuthnResponse = true,
+        
+        // Binding for authentication requests
+        Binding = Saml2BindingType.HttpRedirect,
+        
+        // Sign authentication requests
+        WantAuthnRequestsSigned = false
+    };
+    
+    // Single Sign On Service URL (Azure AD Login URL)
+    idp.SingleSignOnServiceUrl = new Uri(builder.Configuration["Saml2:LoginUrl"]);
+    
+    // Single Logout Service URL
+    idp.SingleLogoutServiceUrl = new Uri(builder.Configuration["Saml2:LogoutUrl"]);
+    
+    options.IdentityProviders.Add(idp);
+    
+    // Notification handlers untuk debugging
+    options.Notifications = new Sustainsys.Saml2.AspNetCore2.Notifications
+    {
+        AuthenticationRequestCreated = (request, provider, dictionary) =>
+        {
+            // Log authentication request
+            Console.WriteLine($"SAML Request created to {provider.EntityId.Id}");
+        },
+        AcsCommandResultCreated = (commandResult, response) =>
+        {
+            // Log ACS response
+            Console.WriteLine($"SAML Response received");
+        }
+    };
+});
+
+builder.Services.AddControllersWithViews()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.PropertyNamingPolicy = null;
+    });
+
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// Register Services
+builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IMenuService, MenuService>();
+builder.Services.AddScoped<IConsolidatePolicyService, ConsolidatePolicyService>();
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+// Important: Order matters!
+app.UseResponseCompression();
+app.UseCors("AllowAngular");
+
+// Use HTTPS redirection (optional in dev)
+// app.UseHttpsRedirection();
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapControllers();
+
+app.Run();
+
+
+==appseting.json====
+
+{
+  "ConnectionStrings": {
+    "NDISIS02": "Server=YOUR_SERVER;Database=NDISIS02;User Id=user;Password=pass;",
+    "NDIPRINT33": "Server=YOUR_SERVER;Database=NDIPRINT33;User Id=user;Password=pass;"
+  },
+  "Jwt": {
+    "Key": "YourSecretKeyMinimum32CharactersLong!",
+    "Issuer": "https://istaruat.id.sunlife:4490",
+    "Audience": "https://istaruat.id.sunlife:4490",
+    "ExpiryMinutes": 60
+  },
+  "Saml2": {
+    "TenantId": "415bb08f-1a20-4fbe-9b57-313be7050945",
+    "EntityId": "https://istaruat.id.sunlife:4490/",
+    "LoginUrl": "https://login.microsoftonline.com/415bb08f-1a20-4fbe-9b57-313be7050945/saml2",
+    "LogoutUrl": "https://login.microsoftonline.com/415bb08f-1a20-4fbe-9b57-313be7050945/saml2",
+    "CallbackUrl": "https://istaruat.id.sunlife:4491/Saml2/Acs",
+    "EntraIdentifier": "https://sts.windows.net/415bb08f-1a20-4fbe-9b57-313be7050945/"
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning",
+      "Sustainsys.Saml2": "Debug"
+    }
+  }
+}
+
+
+====Controllers/AuthController.cs=====
+
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using CompdtBEAPI.Services;
+using CompdtBEAPI.Models.Requests;
+using System.Security.Claims;
+
+namespace CompdtBEAPI.Controllers
+{
+    [Route("api/auth-service")]
+    [ApiController]
+    public class AuthController : ControllerBase
+    {
+        private readonly IAuthService _authService;
+        private readonly ILogger<AuthController> _logger;
+        private readonly IConfiguration _configuration;
+
+        public AuthController(
+            IAuthService authService,
+            ILogger<AuthController> logger,
+            IConfiguration configuration)
+        {
+            _authService = authService;
+            _logger = logger;
+            _configuration = configuration;
+        }
+
+        /// <summary>
+        /// Initiate SAML2 SSO Login
+        /// </summary>
+        [HttpGet("sso-login")]
+        public IActionResult SsoLogin([FromQuery] string returnUrl = "/")
+        {
+            try
+            {
+                _logger.LogInformation("SSO Login initiated with returnUrl: {ReturnUrl}", returnUrl);
+
+                var properties = new AuthenticationProperties
+                {
+                    RedirectUri = Url.Action(nameof(SsoCallback)),
+                    Items =
+                    {
+                        { "returnUrl", returnUrl }
+                    }
+                };
+
+                return Challenge(properties, "Saml2");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error initiating SSO login");
+                return BadRequest(new 
+                { 
+                    success = false, 
+                    message = "Failed to initiate SSO login",
+                    detail = ex.Message 
+                });
+            }
+        }
+
+        /// <summary>
+        /// SAML2 Callback Handler (ACS - Assertion Consumer Service)
+        /// </summary>
+        [HttpPost("sso-callback")]
+        [HttpGet("sso-callback")]
+        public async Task<IActionResult> SsoCallback()
+        {
+            try
+            {
+                _logger.LogInformation("SSO Callback received");
+
+                // Authenticate the SAML response
+                var authenticateResult = await HttpContext.AuthenticateAsync("Saml2");
+
+                if (!authenticateResult.Succeeded)
+                {
+                    _logger.LogWarning("SAML authentication failed");
+                    return Unauthorized(new 
+                    { 
+                        success = false,
+                        message = "SAML authentication failed",
+                        detail = authenticateResult.Failure?.Message 
+                    });
+                }
+
+                // Extract user ID from claims
+                var userId = authenticateResult.Principal.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                          ?? authenticateResult.Principal.FindFirst(ClaimTypes.Name)?.Value
+                          ?? authenticateResult.Principal.FindFirst("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier")?.Value;
+
+                if (string.IsNullOrEmpty(userId))
+                {
+                    _logger.LogWarning("User ID not found in SAML claims");
+                    
+                    // Log all claims for debugging
+                    foreach (var claim in authenticateResult.Principal.Claims)
+                    {
+                        _logger.LogDebug("Claim: {Type} = {Value}", claim.Type, claim.Value);
+                    }
+
+                    return BadRequest(new 
+                    { 
+                        success = false,
+                        message = "User ID not found in SAML response" 
+                    });
+                }
+
+                _logger.LogInformation("SAML authentication successful for user: {UserId}", userId);
+
+                // Sign in with cookie authentication
+                await HttpContext.SignInAsync(
+                    CookieAuthenticationDefaults.AuthenticationScheme,
+                    authenticateResult.Principal,
+                    new AuthenticationProperties
+                    {
+                        IsPersistent = true,
+                        ExpiresUtc = DateTimeOffset.UtcNow.AddHours(8)
+                    });
+
+                // Generate JWT token
+                var loginResponse = await _authService.AuthenticateUserAsync(userId);
+
+                // Redirect to Angular frontend with token
+                var frontendUrl = $"http://localhost:4200/auth-callback?token={loginResponse.Token}&userId={loginResponse.UserId}";
+                
+                _logger.LogInformation("Redirecting to frontend: {Url}", frontendUrl);
+                
+                return Redirect(frontendUrl);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing SSO callback");
+                return StatusCode(500, new 
+                { 
+                    success = false,
+                    message = "Error processing SSO callback",
+                    detail = ex.Message 
+                });
+            }
+        }
+
+        /// <summary>
+        /// Manual login (for testing without SSO)
+        /// </summary>
+        [HttpPost("login")]
+        [Consumes("application/json")]
+        public async Task<IActionResult> Login([FromBody] LoginRequest request)
+        {
+            try
+            {
+                _logger.LogInformation("Manual login attempt for UserId: {UserId}", request?.UserId);
+
+                if (request == null || string.IsNullOrWhiteSpace(request.UserId))
+                {
+                    return BadRequest(new 
+                    { 
+                        success = false, 
+                        message = "UserId is required" 
+                    });
+                }
+
+                var result = await _authService.AuthenticateUserAsync(request.UserId);
+                
+                return Ok(new 
+                { 
+                    success = true, 
+                    data = result 
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during manual login");
+                return StatusCode(500, new 
+                { 
+                    success = false, 
+                    message = "Internal server error" 
+                });
+            }
+        }
+
+        /// <summary>
+        /// SSO Logout
+        /// </summary>
+        [HttpGet("sso-logout")]
+        [HttpPost("sso-logout")]
+        public async Task<IActionResult> SsoLogout()
+        {
+            try
+            {
+                await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+                await HttpContext.SignOutAsync("Saml2");
+
+                return Ok(new { success = true, message = "Logged out successfully" });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during logout");
+                return StatusCode(500, new { success = false, message = "Logout failed" });
+            }
+        }
+
+        /// <summary>
+        /// Get SAML metadata (for Azure AD configuration)
+        /// </summary>
+        [HttpGet("metadata")]
+        public IActionResult Metadata()
+        {
+            return Redirect("/Saml2/Metadata");
+        }
+    }
+}
+
+
+
+Pastikan konfigurasi di Azure AD Enterprise Application sudah benar:
+
+A. Basic SAML Configuration di Azure AD:
+Identifier (Entity ID):
+
+text
+https://istaruat.id.sunlife:4490/
+Reply URL (Assertion Consumer Service URL):
+
+text
+https://istaruat.id.sunlife:4491/Saml2/Acs
+Sign on URL (optional):
+
+text
+https://istaruat.id.sunlife:4491/
+Logout URL:
+
+text
+https://istaruat.id.sunlife:4491/Saml2/Logout
