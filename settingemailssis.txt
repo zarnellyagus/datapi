@@ -1,0 +1,68 @@
+using System;
+using System.Net;
+using System.Net.Mail;
+using System.Data;
+using System.Data.SqlClient;
+
+public void Main()
+{
+    try
+    {
+        // Buat MailMessage instance
+        var theMailer = new MailMessage();
+        
+        // Set sender
+        theMailer.From = new MailAddress("[email protected]", "Nama Pengirim");
+        
+        // Set recipients (multiple recipients)
+        theMailer.To.Add("[email protected]");
+        theMailer.To.Add("[email protected]");
+        
+        // Optional: CC dan BCC
+        theMailer.CC.Add("[email protected]");
+        theMailer.Bcc.Add("[email protected]");
+        
+        // Set subject dan body
+        theMailer.Subject = "Report Excel - " + DateTime.Now.ToString("dd-MMM-yyyy");
+        theMailer.Body = "Dear Team,\n\nTerlampir report Excel untuk periode hari ini.\n\nTerima kasih.";
+        
+        // Optional: Set sebagai HTML body
+        theMailer.IsBodyHtml = false; // Set true jika body adalah HTML
+        
+        // Set priority
+        theMailer.Priority = MailPriority.High; // Normal, Low, atau High
+        
+        // Tambahkan attachment dari file
+        string filePath = @"C:\Reports\Report.xlsx";
+        Attachment attachment = new Attachment(filePath);
+        theMailer.Attachments.Add(attachment);
+        
+        // Optional: Tambahkan multiple attachments
+        // theMailer.Attachments.Add(new Attachment(@"C:\Reports\File2.xlsx"));
+        // theMailer.Attachments.Add(new Attachment(@"C:\Reports\File3.pdf"));
+        
+        // Konfigurasi SMTP Client
+        SmtpClient smtp = new SmtpClient();
+        smtp.Host = "smtp.gmail.com";
+        smtp.Port = 587;
+        smtp.EnableSsl = true;
+        smtp.DeliveryMethod = SmtpDeliveryMethod.Network;
+        smtp.UseDefaultCredentials = false;
+        smtp.Credentials = new NetworkCredential("[email protected]", "your_app_password");
+        smtp.Timeout = 30000; // 30 detik
+        
+        // Kirim email
+        smtp.Send(theMailer);
+        
+        // Dispose attachment
+        attachment.Dispose();
+        theMailer.Dispose();
+        
+        Dts.TaskResult = (int)ScriptResults.Success;
+    }
+    catch (Exception ex)
+    {
+        Dts.Events.FireError(0, "Send Email Error", ex.Message, "", 0);
+        Dts.TaskResult = (int)ScriptResults.Failure;
+    }
+}
